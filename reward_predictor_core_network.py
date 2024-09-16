@@ -24,6 +24,26 @@ def get_dot_position(s):
     return x, y
 
 
+# def net_moving_dot_features(s, batchnorm, dropout, training, reuse):
+#     # Action taken at each time step is encoded in the observations by a2c.py.
+#     a = s[:, 0, 0, -1]
+#     a = tf.cast(a, tf.float32) / 4.0
+
+#     xc, yc = get_dot_position(s)
+#     xc = tf.cast(xc, tf.float32) / 83.0
+#     yc = tf.cast(yc, tf.float32) / 83.0
+
+#     features = [a, xc, yc]
+#     x = tf.stack(features, axis=1)
+
+#     x = dense_layer(x, 64, "d1", reuse, activation='relu')
+#     x = dense_layer(x, 64, "d2", reuse, activation='relu')
+#     x = dense_layer(x, 64, "d3", reuse, activation='relu')
+#     x = dense_layer(x, 1, "d4", reuse, activation=None)
+#     x = x[:, 0]
+
+#     return x
+
 def net_moving_dot_features(s, batchnorm, dropout, training, reuse):
     # Action taken at each time step is encoded in the observations by a2c.py.
     a = s[:, 0, 0, -1]
@@ -33,14 +53,29 @@ def net_moving_dot_features(s, batchnorm, dropout, training, reuse):
     xc = tf.cast(xc, tf.float32) / 83.0
     yc = tf.cast(yc, tf.float32) / 83.0
 
-    features = [a, xc, yc]
-    x = tf.stack(features, axis=1)
+    # Add print operations
+    a_print = tf.print("Action (a):", a, summarize=-1)
+    xc_print = tf.print("X coordinate (xc):", xc, summarize=-1)
+    yc_print = tf.print("Y coordinate (yc):", yc, summarize=-1)
+
+    # Use tf.control_dependencies to ensure prints are executed
+    with tf.control_dependencies([a_print, xc_print, yc_print]):
+        features = [a, xc, yc]
+        print("Features:", features)
+        x = tf.stack(features, axis=1)
 
     x = dense_layer(x, 64, "d1", reuse, activation='relu')
     x = dense_layer(x, 64, "d2", reuse, activation='relu')
     x = dense_layer(x, 64, "d3", reuse, activation='relu')
     x = dense_layer(x, 1, "d4", reuse, activation=None)
     x = x[:, 0]
+
+    # Add print operation for the reward
+    reward_print = tf.print("Predicted Reward:", x, summarize=-1)
+
+    # Use tf.identity with control dependencies to ensure the reward print is executed
+    with tf.control_dependencies([reward_print]):
+        x = tf.identity(x)
 
     return x
 
