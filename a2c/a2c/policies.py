@@ -28,7 +28,7 @@ class LnLstmPolicy(object):
         a0 = sample(pi)
         self.initial_state = np.zeros((nenv, nlstm*2), dtype=np.float32)
 
-        def step(ob, state, mask):
+        def step(ob, state, mask):         
             a, v, s = sess.run([a0, v0, snew], {X:ob, S:state, M:mask})
             return a, v, s
 
@@ -70,7 +70,7 @@ class LstmPolicy(object):
         a0 = sample(pi)
         self.initial_state = np.zeros((nenv, nlstm*2), dtype=np.float32)
 
-        def step(ob, state, mask):
+        def step(ob, state, mask):           
             a, v, s = sess.run([a0, v0, snew], {X:ob, S:state, M:mask})
             return a, v, s
 
@@ -106,7 +106,7 @@ class CnnPolicy(object):
         a0 = sample(pi)
         self.initial_state = [] #not stateful
 
-        def step(ob, *_args, **_kwargs):
+        def step(ob, *_args, **_kwargs):         
             a, v = sess.run([a0, v0], {X:ob})
             return a, v, [] #dummy state
 

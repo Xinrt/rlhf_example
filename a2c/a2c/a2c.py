@@ -125,6 +125,7 @@ class Runner(object):
         self.model = model
         nh, nw, nc = env.observation_space.shape
         nenv = env.num_envs
+        self.nenv = env.num_envs
         self.batch_ob_shape = (nenv * nsteps, nh, nw, nc * nstack)
         self.obs = np.zeros((nenv, nh, nw, nc * nstack), dtype=np.uint8)
         # The first stack of 4 frames: the first 3 frames are zeros,
@@ -151,6 +152,8 @@ class Runner(object):
         # IPC overhead
         self.obs = np.roll(self.obs, shift=-1, axis=3)
         self.obs[:, :, :, -1] = obs[:, :, :, 0]
+
+    
 
     def update_segment_buffer(self, mb_obs, mb_rewards, mb_dones):
         # Segments are only generated from the first worker.
@@ -209,6 +212,14 @@ class Runner(object):
             mb_dones.append(self.dones)
             # len({obs, rewards, dones}) == nenvs
             obs, rewards, dones, _ = self.env.step(actions)
+
+            # Handle None observations
+            if obs is None or np.any(obs == None):
+                print("Warning: Received None observation. Resetting environment.")
+                obs = self.env.reset()
+                if obs is None or np.any(obs == None):
+                    raise ValueError("Environment reset returned None observation.")
+
             self.states = states
             self.dones = dones
             for n, done in enumerate(dones):

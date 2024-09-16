@@ -4,6 +4,8 @@ from PIL import Image
 import gym
 from gym import spaces
 
+from gym_moving_dot.envs.moving_dot_env import MovingDotEnv
+
 
 class NoopResetEnv(gym.Wrapper):
     def __init__(self, env, noop_max=30):
@@ -117,19 +119,42 @@ class ClipRewardEnv(gym.RewardWrapper):
         """Bin reward to {+1, 0, -1} by its sign."""
         return np.sign(reward)
 
+# class WarpFrame(gym.ObservationWrapper):
+#     def __init__(self, env):
+#         """Warp frames to 84x84 as done in the Nature paper and later work."""
+#         gym.ObservationWrapper.__init__(self, env)
+#         self.res = 84
+#         self.observation_space = spaces.Box(low=0, high=255, shape=(self.res, self.res, 1))
+
+#     def _observation(self, obs):
+#         frame = np.dot(obs.astype('float32'), np.array([0.299, 0.587, 0.114], 'float32'))
+#         frame = np.array(Image.fromarray(frame).resize((self.res, self.res),
+#             resample=Image.BILINEAR), dtype=np.uint8)
+#         return frame.reshape((self.res, self.res, 1))
+    
 class WarpFrame(gym.ObservationWrapper):
     def __init__(self, env):
         """Warp frames to 84x84 as done in the Nature paper and later work."""
         gym.ObservationWrapper.__init__(self, env)
-        self.res = 84
-        self.observation_space = spaces.Box(low=0, high=255, shape=(self.res, self.res, 1))
+        self.width = 84
+        self.height = 84
+        self.observation_space = spaces.Box(low=0, high=255,
+            shape=(self.height, self.width, 1), dtype=np.uint8)
 
-    def _observation(self, obs):
-        frame = np.dot(obs.astype('float32'), np.array([0.299, 0.587, 0.114], 'float32'))
-        frame = np.array(Image.fromarray(frame).resize((self.res, self.res),
-            resample=Image.BILINEAR), dtype=np.uint8)
-        return frame.reshape((self.res, self.res, 1))
+    def observation(self, frame):
+        frame = Image.fromarray(frame)
+        frame = frame.convert("L")  # Convert to grayscale
+        frame = frame.resize((self.width, self.height), Image.BILINEAR)
+        return np.array(frame)[:, :, None]
+    
+class ScaledFloatFrame(gym.ObservationWrapper):
+    def __init__(self, env):
+        gym.ObservationWrapper.__init__(self, env)
+        self.observation_space = spaces.Box(low=0, high=1.0, shape=env.observation_space.shape, dtype=np.float32)
 
+    def observation(self, observation):
+        return np.array(observation).astype(np.float32) / 255.0
+    
 class FrameStack(gym.Wrapper):
     def __init__(self, env, k):
         """Buffer observations and stack across channels (last axis)."""
@@ -155,18 +180,41 @@ class FrameStack(gym.Wrapper):
         assert len(self.frames) == self.k
         return np.concatenate(self.frames, axis=2)
 
-def wrap_deepmind(env, episode_life=True, clip_rewards=True):
-    """Configure environment for DeepMind-style Atari.
+# def wrap_deepmind(env, episode_life=True, clip_rewards=True):
+#     """Configure environment for DeepMind-style Atari.
 
-    Note: this does not include frame stacking!"""
-    assert 'NoFrameskip' in env.spec.id  # required for DeepMind-style skip
+#     Note: this does not include frame stacking!"""
+#     assert 'NoFrameskip' in env.spec.id  # required for DeepMind-style skip
+#     if episode_life:
+#         env = EpisodicLifeEnv(env)
+#     env = NoopResetEnv(env, noop_max=30)
+#     env = MaxAndSkipEnv(env, skip=4)
+#     if 'FIRE' in env.unwrapped.get_action_meanings():
+#         env = FireResetEnv(env)
+#     env = WarpFrame(env)
+#     if clip_rewards:
+#         env = ClipRewardEnv(env)
+#     return env
+
+def wrap_deepmind(env, episode_life=True, clip_rewards=True, frame_stack=False, scale=False):
+    """Configure environment for DeepMind-style Atari."""
+    if isinstance(env.unwrapped, MovingDotEnv):
+        env = WarpFrame(env)
+        if scale:
+            env = ScaledFloatFrame(env)
+        if frame_stack:
+            env = FrameStack(env, 4)
+        return env
+    
     if episode_life:
         env = EpisodicLifeEnv(env)
-    env = NoopResetEnv(env, noop_max=30)
-    env = MaxAndSkipEnv(env, skip=4)
     if 'FIRE' in env.unwrapped.get_action_meanings():
         env = FireResetEnv(env)
     env = WarpFrame(env)
+    if scale:
+        env = ScaledFloatFrame(env)
     if clip_rewards:
         env = ClipRewardEnv(env)
+    if frame_stack:
+        env = FrameStack(env, 4)
     return env

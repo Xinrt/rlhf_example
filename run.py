@@ -21,6 +21,23 @@ from reward_predictor import RewardPredictorEnsemble
 from reward_predictor_core_network import net_cnn, net_moving_dot_features
 from utils import VideoRenderer, get_port_range, make_env
 
+
+import gym
+from gym.envs.registration import register
+# Try to register the environment
+try:
+    register(
+        id='MovingDotNoFrameskip-v0',
+        entry_point='gym_moving_dot.envs.moving_dot_env:MovingDotEnv'
+    )
+except gym.error.Error:
+    pass  # Environment already registered
+
+# Print all registered environments
+from gym import envs
+print("Registered environments:")
+print(list(envs.registry.keys()))
+
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'  # filter out INFO messages
 
 
