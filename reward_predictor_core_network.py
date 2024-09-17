@@ -8,6 +8,7 @@ import tensorflow as tf
 from nn_layers import dense_layer, conv_layer
 
 
+
 def get_dot_position(s):
     """
     Estimate the position of the dot in the gym-moving-dot environment.
@@ -104,3 +105,44 @@ def net_cnn(s, batchnorm, dropout, training, reuse):
     x = x[:, 0]
 
     return x
+
+
+
+
+def net_mlp(s, batchnorm, dropout, training, reuse):
+    """
+    MLP network for Hopper-v4 environment.
+    
+    Args:
+    s: Input tensor (state)
+    batchnorm: Boolean, whether to use batch normalization
+    dropout: Float, dropout rate
+    training: Boolean, whether in training mode
+    reuse: Boolean, whether to reuse variables
+    
+    Returns:
+    x: Output tensor (predicted reward)
+    """
+    x = s  # Input is already normalized in Hopper-v4
+
+    # MLP architecture with 3 hidden layers
+    x = dense_layer(x, 64, "d1", reuse, activation='relu')
+    if batchnorm:
+        x = tf.layers.batch_normalization(x, training=training, reuse=reuse, name="bn1")
+    x = tf.layers.dropout(x, rate=dropout, training=training)
+
+    x = dense_layer(x, 64, "d2", reuse, activation='relu')
+    if batchnorm:
+        x = tf.layers.batch_normalization(x, training=training, reuse=reuse, name="bn2")
+    x = tf.layers.dropout(x, rate=dropout, training=training)
+
+    x = dense_layer(x, 64, "d3", reuse, activation='relu')
+    if batchnorm:
+        x = tf.layers.batch_normalization(x, training=training, reuse=reuse, name="bn3")
+    x = tf.layers.dropout(x, rate=dropout, training=training)
+
+    x = dense_layer(x, 1, "d4", reuse, activation=None)
+    x = x[:, 0]  # Flatten to a 1D tensor
+
+    return x
+

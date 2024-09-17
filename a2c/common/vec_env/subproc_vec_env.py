@@ -20,7 +20,11 @@ def worker(remote, env_fn_wrapper):
         elif cmd == 'get_spaces':
             remote.send((env.action_space, env.observation_space))
         elif cmd == 'get_action_meanings':
-            remote.send(env.unwrapped.get_action_meanings())
+            # remote.send(env.unwrapped.get_action_meanings())
+            if hasattr(env.unwrapped, 'get_action_meanings'):
+                remote.send(env.unwrapped.get_action_meanings())   # For discrete action spaces
+            else:
+                remote.send(None)   # For continuous action spaces
         else:
             raise NotImplementedError
 
@@ -58,7 +62,6 @@ class SubprocVecEnv(VecEnv):
 
         self.env_id = env_id
 
-
     def step(self, actions):
         for remote, action in zip(self.remotes, actions):
             remote.send(('step', action))
@@ -80,3 +83,5 @@ class SubprocVecEnv(VecEnv):
     @property
     def num_envs(self):
         return len(self.remotes)
+
+

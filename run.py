@@ -11,15 +11,17 @@ import cloudpickle
 import easy_tf_log
 from a2c import logger
 from a2c.a2c.a2c import learn
-from a2c.a2c.policies import CnnPolicy, MlpPolicy
+from a2c.a2c.policies import CnnPolicy, MlpPolicy, MlpContPolicy
 from a2c.common import set_global_seeds
 from a2c.common.vec_env.subproc_vec_env import SubprocVecEnv
 from params import parse_args, PREFS_VAL_FRACTION
 from pref_db import PrefDB, PrefBuffer
 from pref_interface import PrefInterface
 from reward_predictor import RewardPredictorEnsemble
-from reward_predictor_core_network import net_cnn, net_moving_dot_features
+from reward_predictor_core_network import net_cnn, net_moving_dot_features, net_mlp
 from utils import VideoRenderer, get_port_range, make_env
+
+from gym.envs.mujoco import HopperEnv
 
 
 import gym
@@ -32,6 +34,8 @@ try:
     )
 except gym.error.Error:
     pass  # Environment already registered
+
+
 
 # Print all registered environments
 from gym import envs
@@ -71,6 +75,8 @@ def run(general_params,
         reward_predictor_network = net_moving_dot_features
     elif a2c_params['env_id'] in ['PongNoFrameskip-v4', 'EnduroNoFrameskip-v4']:
         reward_predictor_network = net_cnn
+    elif a2c_params['env_id'] == 'Hopper-v4':
+        reward_predictor_network = net_mlp
     else:
         raise Exception("Unsure about reward predictor network for {}".format(
             a2c_params['env_id']))
@@ -232,11 +238,20 @@ def configure_a2c_logger(log_dir):
     tb = logger.TensorBoardOutputFormat(a2c_dir)
     logger.Logger.CURRENT = logger.Logger(dir=a2c_dir, output_formats=[tb])
 
+# Add this function to create a custom wrapper for Hopper-v4
+def make_hopper_env(seed):
+    env = gym.make('Hopper-v4')
+    env.seed(seed)
+    return env
 
 def make_envs(env_id, n_envs, seed):
     def wrap_make_env(env_id, rank):
         def _thunk():
-            return make_env(env_id, seed + rank)
+            if env_id == 'Hopper-v4':
+                return make_hopper_env(seed + rank)
+            else:
+                return make_env(env_id, seed + rank)
+            # return make_env(env_id, seed + rank)
         return _thunk
     set_global_seeds(seed)
     env = SubprocVecEnv(env_id, [wrap_make_env(env_id, i)
@@ -263,6 +278,8 @@ def start_policy_training(cluster_dict, make_reward_predictor, gen_segments,
         policy_fn = MlpPolicy
     elif env_id in ['PongNoFrameskip-v4', 'EnduroNoFrameskip-v4']:
         policy_fn = CnnPolicy
+    elif env_id == 'Hopper-v4':
+        policy_fn = MlpContPolicy
     else:
         msg = "Unsure about policy network for {}".format(a2c_params['env_id'])
         raise Exception(msg)

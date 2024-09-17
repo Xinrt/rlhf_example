@@ -38,6 +38,7 @@ class Model(object):
         config.gpu_options.allow_growth = True
         sess = tf.Session(config=config)
         nbatch = nenvs * nsteps
+        self.nbatch = nenvs * nsteps
 
         A = tf.placeholder(tf.int32, [nbatch])
         ADV = tf.placeholder(tf.float32, [nbatch])
@@ -123,35 +124,68 @@ class Runner(object):
                  episode_vid_queue):
         self.env = env
         self.model = model
-        nh, nw, nc = env.observation_space.shape
-        nenv = env.num_envs
+        self.nstack = nstack
+        self.nsteps = nsteps
+        self.gamma = gamma
+        
+        # Determine observation space shape
+        if len(env.observation_space.shape) == 3:
+            self.nh, self.nw, self.nc = env.observation_space.shape
+            self.obs_type = "image"
+        elif len(env.observation_space.shape) == 1:
+            self.nh = env.observation_space.shape[0]
+            self.nw, self.nc = 1, 1
+            self.obs_type = "vector"
+        else:
+            raise ValueError(f"Unexpected observation space shape: {env.observation_space.shape}")
+        
         self.nenv = env.num_envs
-        self.batch_ob_shape = (nenv * nsteps, nh, nw, nc * nstack)
-        self.obs = np.zeros((nenv, nh, nw, nc * nstack), dtype=np.uint8)
+        print(f"Runner: nenvs: {self.nenv}, nsteps: {self.nsteps}") 
+        
+
+       # Take the first observation to determine the shape of `obs`
+        obs = self.env.reset()
+        if self.obs_type == "image":
+            self.obs = np.zeros((self.nenv, self.nh, self.nw, self.nc * self.nstack), dtype=np.uint8)
+            self.batch_ob_shape = (self.nenv * self.nsteps, self.nh, self.nw, self.nc * self.nstack)
+        elif self.obs_type == "vector":
+            self.obs = np.zeros((self.nenv, self.nh * self.nstack), dtype=np.float32)
+            self.batch_ob_shape = (self.nenv * self.nsteps, self.nh * self.nstack)
+
+        # self.batch_ob_shape = (nenv * nsteps, nh, nw, nc * nstack)
+        # self.obs = np.zeros((nenv, nh, nw, nc * nstack), dtype=np.uint8)
+
         # The first stack of 4 frames: the first 3 frames are zeros,
         # with the last frame coming from env.reset().
-        obs = env.reset()
-        self.update_obs(obs)
-        self.gamma = gamma
-        self.nsteps = nsteps
         self.states = model.initial_state
-        self.dones = [False for _ in range(nenv)]
+        self.dones = [False for _ in range(self.nenv)]
 
         self.gen_segments = gen_segments
         self.segment = Segment()
         self.seg_pipe = seg_pipe
 
-        self.orig_reward = [0 for _ in range(nenv)]
+        self.orig_reward = [0 for _ in range(self.nenv)]
         self.reward_predictor = reward_predictor
 
         self.episode_frames = []
         self.episode_vid_queue = episode_vid_queue
 
+    # def update_obs(self, obs):
+    #     # Do frame-stacking here instead of the FrameStack wrapper to reduce
+    #     # IPC overhead
+    #     self.obs = np.roll(self.obs, shift=-1, axis=3)
+    #     print("self.obs.shape: ", self.obs.shape)
+    #     print("obs: ", obs)
+    #     print("obs.shape: ", obs.shape)
+    #     self.obs[:, :, :, -1] = obs[:, :, :, 0]
+
     def update_obs(self, obs):
-        # Do frame-stacking here instead of the FrameStack wrapper to reduce
-        # IPC overhead
-        self.obs = np.roll(self.obs, shift=-1, axis=3)
-        self.obs[:, :, :, -1] = obs[:, :, :, 0]
+        if self.obs_type == "image":
+            self.obs = np.roll(self.obs, shift=-1, axis=3)
+            self.obs[:, :, :, -self.nc:] = obs
+        elif self.obs_type == "vector":
+            self.obs = np.roll(self.obs, shift=-self.nh, axis=1)
+            self.obs[:, -self.nh:] = obs
 
     
 
@@ -231,11 +265,12 @@ class Runner(object):
         mb_dones.append(self.dones)
         # batch of steps to batch of rollouts
         # i.e. from nsteps, nenvs to nenvs, nsteps
-        mb_obs = np.asarray(mb_obs, dtype=np.uint8).swapaxes(1, 0)
+        # mb_obs = np.asarray(mb_obs, dtype=np.uint8).swapaxes(1, 0)
+        mb_obs = np.asarray(mb_obs, dtype=np.float32 if self.obs_type == "vector" else np.uint8).swapaxes(1, 0)
         mb_rewards = np.asarray(mb_rewards, dtype=np.float32).swapaxes(1, 0)
         mb_actions = np.asarray(mb_actions, dtype=np.int32).swapaxes(1, 0)
         mb_values = np.asarray(mb_values, dtype=np.float32).swapaxes(1, 0)
-        mb_dones = np.asarray(mb_dones, dtype=np.bool).swapaxes(1, 0)
+        mb_dones = np.asarray(mb_dones, dtype=bool).swapaxes(1, 0)
         mb_masks = mb_dones[:, :-1]
         # The first entry was just the init state of 'dones' (all False),
         # before we'd actually run any steps, so drop it.
@@ -306,10 +341,23 @@ class Runner(object):
                 rewards = discount_with_dones(rewards, dones, self.gamma)
             mb_rewards[n] = rewards
 
-        mb_rewards = mb_rewards.flatten()
-        mb_actions = mb_actions.flatten()
-        mb_values = mb_values.flatten()
-        mb_masks = mb_masks.flatten()
+        # mb_rewards = mb_rewards.flatten()
+        # mb_actions = mb_actions.flatten()
+        # mb_values = mb_values.flatten()
+        # mb_masks = mb_masks.flatten()
+
+        # Flatten the batch
+        # print(f"Runner.run: Actual batch sizes - obs: {mb_obs.shape[0]}, rewards: {mb_rewards.shape[0]}, actions: {mb_actions.shape[0]}, values: {mb_values.shape[0]}, masks: {mb_masks.shape[0]}")
+
+        nbatch = self.nenv * self.nsteps
+        mb_obs = mb_obs.reshape(nbatch, -1)
+        mb_rewards = mb_rewards.reshape(nbatch)
+        mb_actions = mb_actions.reshape(-1)[:nbatch]
+        mb_values = mb_values.reshape(nbatch)
+        mb_masks = mb_masks.reshape(nbatch)
+
+
+
         return mb_obs, mb_states, mb_rewards, mb_masks, mb_actions, mb_values
 
 
@@ -340,8 +388,10 @@ def learn(policy,
     set_global_seeds(seed)
 
     nenvs = env.num_envs
+    print(f"nenvs: {nenvs}, nsteps: {nsteps}")
     ob_space = env.observation_space
     ac_space = env.action_space
+    nbatch = nenvs * nsteps
     num_procs = len(env.remotes)  # HACK
 
     def make_model():
@@ -411,6 +461,13 @@ def learn(policy,
     for update in range(1, total_timesteps // nbatch + 1):
         # Run for nsteps
         obs, states, rewards, masks, actions, values = runner.run()
+
+        # Ensure that the shapes are correct
+        assert obs.shape[0] == nbatch, f"Expected obs shape ({nbatch}, ...), got {obs.shape}"
+        assert rewards.shape[0] == nbatch, f"Expected rewards shape ({nbatch},), got {rewards.shape}"
+        assert masks.shape[0] == nbatch, f"Expected masks shape ({nbatch},), got {masks.shape}"
+        assert actions.shape[0] == nbatch, f"Expected actions shape ({nbatch},), got {actions.shape}"
+        assert values.shape[0] == nbatch, f"Expected values shape ({nbatch},), got {values.shape}"
 
         policy_loss, value_loss, policy_entropy, cur_lr = model.train(
             obs, states, rewards, masks, actions, values)
