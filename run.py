@@ -77,6 +77,8 @@ def run(general_params,
         reward_predictor_network = net_cnn
     elif a2c_params['env_id'] == 'Hopper-v4':
         reward_predictor_network = net_mlp
+    elif a2c_params['env_id'] in ['BipedalWalker-v3', 'Swimmer-v4', 'HalfCheetah-v4', 'Ant-v4', 'Reacher-v4','Pendulum-v1','InvertedDoublePendulum-v4']:
+        reward_predictor_network = net_mlp
     else:
         raise Exception("Unsure about reward predictor network for {}".format(
             a2c_params['env_id']))
@@ -249,16 +251,17 @@ def configure_a2c_logger(log_dir):
     logger.Logger.CURRENT = logger.Logger(dir=a2c_dir, output_formats=[tb])
 
 # Add this function to create a custom wrapper for Hopper-v4
-def make_hopper_env(seed):
-    env = gym.make('Hopper-v4')
+def make_hopper_env(seed, env_id):
+    env = gym.make(env_id)
     env.seed(seed)
     return env
 
 def make_envs(env_id, n_envs, seed):
     def wrap_make_env(env_id, rank):
         def _thunk():
-            if env_id == 'Hopper-v4':
-                return make_hopper_env(seed + rank)
+            # if env_id == 'Hopper-v4':
+            if env_id in ['Hopper-v4', 'BipedalWalker-v3', 'Swimmer-v4', 'HalfCheetah-v4', 'Ant-v4', 'Reacher-v4', 'Pendulum-v1', 'InvertedDoublePendulum-v4']:
+                return make_hopper_env(seed + rank, env_id)
             else:
                 return make_env(env_id, seed + rank)
             # return make_env(env_id, seed + rank)
@@ -267,6 +270,7 @@ def make_envs(env_id, n_envs, seed):
     env = SubprocVecEnv(env_id, [wrap_make_env(env_id, i)
                                  for i in range(n_envs)])
     return env
+
 
 
 def start_parameter_server(cluster_dict, make_reward_predictor):
@@ -289,6 +293,8 @@ def start_policy_training(cluster_dict, make_reward_predictor, gen_segments,
     elif env_id in ['PongNoFrameskip-v4', 'EnduroNoFrameskip-v4']:
         policy_fn = CnnPolicy
     elif env_id == 'Hopper-v4':
+        policy_fn = MlpContPolicy
+    elif env_id in ['BipedalWalker-v3', 'Swimmer-v4', 'HalfCheetah-v4', 'Ant-v4', 'Reacher-v4','Pendulum-v1','InvertedDoublePendulum-v4']:
         policy_fn = MlpContPolicy
     else:
         msg = "Unsure about policy network for {}".format(a2c_params['env_id'])
