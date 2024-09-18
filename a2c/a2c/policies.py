@@ -169,7 +169,6 @@ class MlpPolicy(object):
         
 
 class MlpContPolicy(object):
-
     def __init__(self,
                  sess,
                  ob_space,
@@ -178,63 +177,51 @@ class MlpContPolicy(object):
                  nsteps,
                  nstack,
                  reuse=False):
-        
 
-        nbatch = nenv*nsteps
-
-
-        # if len(ob_space.shape) == 3:
-        #     nh, nw, nc = ob_space.shape  # If 3D observation space (like image)
-        # elif len(ob_space.shape) == 1:
-        #     nh = ob_space.shape[0]  # If 1D observation vector
-        #     nw, nc = 1, 1  # Set default values as these dimensions do not exist
-        # else:
-        #     raise ValueError(f"Unexpected ob_space.shape: {ob_space.shape}")
-        # # nh, nw, nc = ob_space.shape
-        # ob_shape = (nbatch, nh, nw, nc*nstack)
-
-        # if isinstance(ac_space, gym.spaces.Box):
-        #     nact = ac_space.shape[0]  # Obtain the number of actions for a continuous action space
-        # # Discrete
-        # elif isinstance(ac_space, gym.spaces.Discrete):
-        #     nact = ac_space.n
-        # else:
-        #     raise ValueError(f"Unsupported action space type: {type(ac_space)}")
-
+        nbatch = nenv * nsteps
         ob_shape = (nbatch, ob_space.shape[0] * nstack)
-        
         nact = ac_space.shape[0] if isinstance(ac_space, gym.spaces.Box) else ac_space.n
-        # nact = ac_space.n
-        # X = tf.placeholder(tf.uint8, ob_shape)  # obs
+
+        # Input placeholder
         X = tf.placeholder(tf.float32, ob_shape, name="Ob")
         with tf.variable_scope("model", reuse=reuse):
-            # x = tf.cast(X, tf.float32)/255.
-            x = X  # No need to cast or reshape
-
-            # Only look at the most recent frame
-            # x = x[:, :, :, -1]
-
-            # w, h = x.get_shape()[1:]
-            x = fc(x, 'fc1', nh=64, init_scale=np.sqrt(2))
+            # Build network
+            x = fc(X, 'fc1', nh=64, init_scale=np.sqrt(2))
             x = tf.nn.tanh(x)
             x = fc(x, 'fc2', nh=64, init_scale=np.sqrt(2))
             x = tf.nn.tanh(x)
-            pi = fc(x, 'pi', nact, act=lambda x: x)
+
+            # Output action mean
+            mean = fc(x, 'pi', nact, act=lambda x: x)
+
+            # Use a trainable variable to represent the log standard deviation
+            log_std = tf.get_variable(name='log_std', shape=[nact], initializer=tf.zeros_initializer())
+            std = tf.exp(log_std)
+
+            # Create a Gaussian distribution for the action
+            pi = mean + std * tf.random_normal(tf.shape(mean))
+
+            # Value function output
             vf = fc(x, 'v', 1, act=lambda x: x)
 
         v0 = vf[:, 0]
-        a0 = pi  # For continuous action spaces, we don't need to sample
-        self.initial_state = []  # not stateful
+        a0 = pi  # Action sampled from Gaussian distribution
+        self.initial_state = []  # No state
 
+        # `step` function, now sampling actions from Gaussian distribution
         def step(ob, *_args, **_kwargs):
             a, v = sess.run([a0, v0], {X: ob})
-            return a, v, []  # dummy state
+            return a, v, []  # Return action, value function, and state
 
         def value(ob, *_args, **_kwargs):
             return sess.run(v0, {X: ob})
 
         self.X = X
+        self.mean = mean  # Directly expose mean
+        self.log_std = log_std  # Directly expose log_std
         self.pi = pi
         self.vf = vf
         self.step = step
         self.value = value
+
+

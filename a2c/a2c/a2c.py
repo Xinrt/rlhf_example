@@ -39,8 +39,10 @@ class Model(object):
         sess = tf.Session(config=config)
         nbatch = nenvs * nsteps
         self.nbatch = nenvs * nsteps
+        self.ac_space = ac_space
 
-        A = tf.placeholder(tf.int32, [nbatch])
+        # A = tf.placeholder(tf.int32, [nbatch])
+        A = tf.placeholder(tf.float32, [nbatch, ac_space.shape[0]])
         ADV = tf.placeholder(tf.float32, [nbatch])
         R = tf.placeholder(tf.float32, [nbatch])
         LR = tf.placeholder(tf.float32, [])
@@ -50,9 +52,32 @@ class Model(object):
         train_model = policy(
             sess, ob_space, ac_space, nenvs, nsteps, nstack, reuse=True)
 
-        neglogpac = tf.nn.sparse_softmax_cross_entropy_with_logits(
-            logits=train_model.pi, labels=A)
-        pg_loss = tf.reduce_mean(ADV * neglogpac)
+        # Change to the continuous case
+        # neglogpac = tf.nn.sparse_softmax_cross_entropy_with_logits(
+        #     logits=train_model.pi, labels=A)
+        # pg_loss = tf.reduce_mean(ADV * neglogpac)
+
+
+        # mean, log_std = train_model.pi
+        mean = train_model.mean
+        log_std = train_model.log_std
+        std = tf.exp(log_std)
+
+        # Create a normal distribution
+        normal_dist = tf.distributions.Normal(mean, std)
+
+        # Calculate the log probability of the action
+        # log_prob = normal_dist.log_prob(A)
+        tf.assert_equal(tf.shape(A), tf.shape(mean), message="A and mean must have the same shape.")
+
+        # 计算 log 概率
+        log_prob = normal_dist.log_prob(tf.cast(A, tf.float32))
+        log_prob = tf.reduce_sum(log_prob, axis=-1)  # Sum over action dimensions
+
+        pg_loss = -tf.reduce_mean(ADV * log_prob)
+
+
+
         vf_loss = tf.reduce_mean(mse(tf.squeeze(train_model.vf), R))
         entropy = tf.reduce_mean(cat_entropy(train_model.pi))
         loss = pg_loss - entropy * ent_coef + vf_loss * vf_coef
@@ -71,6 +96,14 @@ class Model(object):
             n_steps = len(obs)
             for _ in range(n_steps):
                 cur_lr = lr_scheduler.value()
+
+    
+            # Define the shape of actions
+            if actions.ndim == 1:  # If actions is one-dimensional
+                actions = np.expand_dims(actions, -1)
+                actions = np.tile(actions, (1, self.ac_space.shape[0]))  # Expand to [80, 3]
+            
+
             td_map = {
                 train_model.X: obs,
                 A: actions,
@@ -78,6 +111,8 @@ class Model(object):
                 R: rewards,
                 LR: cur_lr
             }
+             
+
             if states != []:
                 td_map[train_model.S] = states
                 td_map[train_model.M] = masks
@@ -127,6 +162,7 @@ class Runner(object):
         self.nstack = nstack
         self.nsteps = nsteps
         self.gamma = gamma
+        self.ac_space = model.ac_space
         
         # Determine observation space shape
         if len(env.observation_space.shape) == 3:
@@ -232,48 +268,61 @@ class Runner(object):
 
     def run(self):
         nenvs = len(self.env.remotes)
-        mb_obs, mb_rewards, mb_actions, mb_values, mb_dones = \
-            [], [], [], [], []
+        mb_obs, mb_rewards, mb_actions, mb_values, mb_dones = [], [], [], [], []
         mb_states = self.states
+
+        obs = self.env.reset()  # Reset the environment
+        self.dones = [False] * self.nenv  # Initialize dones to False
 
         # Run for nsteps steps in the environment
         for _ in range(self.nsteps):
-            actions, values, states = self.model.step(self.obs, self.states,
-                                                      self.dones)
+            actions, values, states = self.model.step(self.obs, self.states, self.dones)
+
+            # Ensure actions is two-dimensional [80, 3]
+            if actions.ndim == 1:
+                actions = np.expand_dims(actions, -1)
+                actions = np.tile(actions, (1, self.ac_space.shape[0]))  # 扩展为 [80, 3]
+
             mb_obs.append(np.copy(self.obs))
             mb_actions.append(actions)
             mb_values.append(values)
             mb_dones.append(self.dones)
-            # len({obs, rewards, dones}) == nenvs
-            obs, rewards, dones, _ = self.env.step(actions)
 
-            # Handle None observations
+            # Get new states from the environment
+            obs, rewards, dones, _ = self.env.step(actions)  # Get dones here
+
+            # Ensure dones is correctly initialized
+            if dones is None:
+                dones = [False] * self.nenv  # If dones is None, initialize manually
+
+            # Handle obs being None
             if obs is None or np.any(obs == None):
                 print("Warning: Received None observation. Resetting environment.")
-                obs = self.env.reset()
+                obs = self.env.reset()  # Reset the environment
                 if obs is None or np.any(obs == None):
                     raise ValueError("Environment reset returned None observation.")
 
             self.states = states
-            self.dones = dones
+            self.dones = dones  # Assign dones to self.dones
+
+            # Reset the state after completion
             for n, done in enumerate(dones):
                 if done:
                     self.obs[n] = self.obs[n] * 0
+
             # SubprocVecEnv automatically resets when done
             self.update_obs(obs)
             mb_rewards.append(rewards)
+
         mb_dones.append(self.dones)
-        # batch of steps to batch of rollouts
-        # i.e. from nsteps, nenvs to nenvs, nsteps
-        # mb_obs = np.asarray(mb_obs, dtype=np.uint8).swapaxes(1, 0)
+
+        # Convert batches to rollouts
         mb_obs = np.asarray(mb_obs, dtype=np.float32 if self.obs_type == "vector" else np.uint8).swapaxes(1, 0)
         mb_rewards = np.asarray(mb_rewards, dtype=np.float32).swapaxes(1, 0)
         mb_actions = np.asarray(mb_actions, dtype=np.int32).swapaxes(1, 0)
         mb_values = np.asarray(mb_values, dtype=np.float32).swapaxes(1, 0)
         mb_dones = np.asarray(mb_dones, dtype=bool).swapaxes(1, 0)
         mb_masks = mb_dones[:, :-1]
-        # The first entry was just the init state of 'dones' (all False),
-        # before we'd actually run any steps, so drop it.
         mb_dones = mb_dones[:, 1:]
 
         # Log original rewards
@@ -283,9 +332,7 @@ class Runner(object):
             for step_n in range(self.nsteps):
                 self.orig_reward[env_n] += rs[step_n]
                 if dones[step_n]:
-                    easy_tf_log.tflog(
-                        "orig_reward_{}".format(env_n),
-                        self.orig_reward[env_n])
+                    easy_tf_log.tflog("orig_reward_{}".format(env_n), self.orig_reward[env_n])
                     self.orig_reward[env_n] = 0
 
         if self.env.env_id == 'MovingDotNoFrameskip-v0':
