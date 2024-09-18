@@ -81,7 +81,7 @@ def run(general_params,
         raise Exception("Unsure about reward predictor network for {}".format(
             a2c_params['env_id']))
 
-    def make_reward_predictor(name, cluster_dict):
+    def make_reward_predictor(name, cluster_dict, nh, nstack):
         return RewardPredictorEnsemble(
             cluster_job_name=name,
             cluster_dict=cluster_dict,
@@ -89,7 +89,9 @@ def run(general_params,
             batchnorm=rew_pred_training_params['batchnorm'],
             dropout=rew_pred_training_params['dropout'],
             lr=rew_pred_training_params['lr'],
-            core_network=reward_predictor_network)
+            core_network=reward_predictor_network,
+            nh=nh,
+            nstack=nstack)
 
     save_make_reward_predictor(general_params['log_dir'],
                                make_reward_predictor)
@@ -104,6 +106,8 @@ def run(general_params,
             episode_vid_queue=episode_vid_queue,
             log_dir=general_params['log_dir'],
             a2c_params=a2c_params)
+        nh = env.observation_space.shape[0]  # 获取观测空间的维度
+        nstack = 4       # 假设 nstack 定义在 a2c_params 中
         pi, pi_proc = start_pref_interface(
             seg_pipe=seg_pipe,
             pref_pipe=pref_pipe,
@@ -143,7 +147,9 @@ def run(general_params,
             n_initial_epochs=rew_pred_training_params['n_initial_epochs'],
             val_interval=rew_pred_training_params['val_interval'],
             ckpt_interval=rew_pred_training_params['ckpt_interval'],
-            log_dir=general_params['log_dir'])
+            log_dir=general_params['log_dir'],
+            nh=nh,
+            nstack=nstack)
         rpt_proc.join()
         ps_proc.terminate()
     elif general_params['mode'] == 'train_policy_with_original_rewards':
@@ -171,6 +177,8 @@ def run(general_params,
             episode_vid_queue=episode_vid_queue,
             log_dir=general_params['log_dir'],
             a2c_params=a2c_params)
+        nh = env.observation_space.shape[0]  # 获取观测空间的维度
+        nstack = 4        # 假设 nstack 定义在 a2c_params 中
         pi, pi_proc = start_pref_interface(
             seg_pipe=seg_pipe,
             pref_pipe=pref_pipe,
@@ -189,7 +197,9 @@ def run(general_params,
             n_initial_epochs=rew_pred_training_params['n_initial_epochs'],
             val_interval=rew_pred_training_params['val_interval'],
             ckpt_interval=rew_pred_training_params['ckpt_interval'],
-            log_dir=general_params['log_dir'])
+            log_dir=general_params['log_dir'],
+            nh=nh,
+            nstack=nstack)
         # We wait for A2C to complete the specified number of policy training
         # steps
         a2c_proc.join()
@@ -292,12 +302,17 @@ def start_policy_training(cluster_dict, make_reward_predictor, gen_segments,
                     a2c_params['seed'])
     del a2c_params['env_id'], a2c_params['n_envs']
 
+    # 动态获取观测空间的大小和堆叠帧数
+    nh = env.observation_space.shape[0]  # 获取观测空间的维度
+    nstack = 4  # 假设 nstack 定义在 a2c_params 中
+
     ckpt_dir = osp.join(log_dir, 'policy_checkpoints')
     os.makedirs(ckpt_dir)
 
     def f():
         if make_reward_predictor:
-            reward_predictor = make_reward_predictor('a2c', cluster_dict)
+            # reward_predictor = make_reward_predictor('a2c', cluster_dict)
+            reward_predictor = make_reward_predictor('a2c', cluster_dict, nh, nstack)
         else:
             reward_predictor = None
         misc_logs_dir = osp.join(log_dir, 'a2c_misc')
@@ -349,9 +364,11 @@ def start_reward_predictor_training(cluster_dict,
                                     load_ckpt_dir,
                                     val_interval,
                                     ckpt_interval,
-                                    log_dir):
+                                    log_dir,
+                                    nh,
+                                    nstack):
     def f():
-        rew_pred = make_reward_predictor('train', cluster_dict)
+        rew_pred = make_reward_predictor('train', cluster_dict, nh, nstack)
         rew_pred.init_network(load_ckpt_dir)
 
         if prefs_dir is not None:

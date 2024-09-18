@@ -41,6 +41,8 @@ class Model(object):
         self.nbatch = nenvs * nsteps
         self.ac_space = ac_space
 
+
+
         # A = tf.placeholder(tf.int32, [nbatch])
         A = tf.placeholder(tf.float32, [nbatch, ac_space.shape[0]])
         ADV = tf.placeholder(tf.float32, [nbatch])
@@ -164,6 +166,8 @@ class Runner(object):
         self.gamma = gamma
         self.ac_space = model.ac_space
         
+
+        
         # Determine observation space shape
         if len(env.observation_space.shape) == 3:
             self.nh, self.nw, self.nc = env.observation_space.shape
@@ -231,7 +235,12 @@ class Runner(object):
         e0_obs = mb_obs[0]
         e0_rew = mb_rewards[0]
         e0_dones = mb_dones[0]
-        assert_equal(e0_obs.shape, (self.nsteps, 84, 84, 4))
+        # assert_equal(e0_obs.shape, (self.nsteps, 84, 84, 4))
+        # assert_equal(e0_rew.shape, (self.nsteps, ))
+        # assert_equal(e0_dones.shape, (self.nsteps, ))
+
+        # Modify the shape assertion to match the actual shape of e0_obs
+        assert_equal(e0_obs.shape, (self.nsteps, self.nh * self.nstack))  
         assert_equal(e0_rew.shape, (self.nsteps, ))
         assert_equal(e0_dones.shape, (self.nsteps, ))
 
@@ -316,10 +325,19 @@ class Runner(object):
 
         mb_dones.append(self.dones)
 
-        # Convert batches to rollouts
-        mb_obs = np.asarray(mb_obs, dtype=np.float32 if self.obs_type == "vector" else np.uint8).swapaxes(1, 0)
+        # # Convert batches to rollouts
+        # mb_obs = np.asarray(mb_obs, dtype=np.float32 if self.obs_type == "vector" else np.uint8).swapaxes(1, 0)
+        # mb_rewards = np.asarray(mb_rewards, dtype=np.float32).swapaxes(1, 0)
+        # mb_actions = np.asarray(mb_actions, dtype=np.int32).swapaxes(1, 0)
+        # mb_values = np.asarray(mb_values, dtype=np.float32).swapaxes(1, 0)
+        # mb_dones = np.asarray(mb_dones, dtype=bool).swapaxes(1, 0)
+        # mb_masks = mb_dones[:, :-1]
+        # mb_dones = mb_dones[:, 1:]
+
+        # Modify the assertion
+        mb_obs = np.asarray(mb_obs, dtype=np.float32).swapaxes(1, 0)
         mb_rewards = np.asarray(mb_rewards, dtype=np.float32).swapaxes(1, 0)
-        mb_actions = np.asarray(mb_actions, dtype=np.int32).swapaxes(1, 0)
+        mb_actions = np.asarray(mb_actions, dtype=np.float32).swapaxes(1, 0)
         mb_values = np.asarray(mb_values, dtype=np.float32).swapaxes(1, 0)
         mb_dones = np.asarray(mb_dones, dtype=bool).swapaxes(1, 0)
         mb_masks = mb_dones[:, :-1]
@@ -354,8 +372,11 @@ class Runner(object):
         # action.)
         logging.debug("Original rewards:\n%s", mb_rewards)
         if self.reward_predictor:
-            assert_equal(mb_obs.shape, (nenvs, self.nsteps, 84, 84, 4))
-            mb_obs_allenvs = mb_obs.reshape(nenvs * self.nsteps, 84, 84, 4)
+            # assert_equal(mb_obs.shape, (nenvs, self.nsteps, 84, 84, 4))
+            assert_equal(mb_obs.shape, (nenvs, self.nsteps, self.nh * self.nstack))
+            # mb_obs_allenvs = mb_obs.reshape(nenvs * self.nsteps, 84, 84, 4)
+            mb_obs_allenvs = mb_obs.reshape(nenvs * self.nsteps, self.nh * self.nstack)
+
 
             rewards_allenvs = self.reward_predictor.reward(mb_obs_allenvs)
             assert_equal(rewards_allenvs.shape, (nenvs * self.nsteps, ))

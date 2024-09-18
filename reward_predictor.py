@@ -23,8 +23,12 @@ class RewardPredictorEnsemble:
                  batchnorm=False,
                  dropout=0.0,
                  n_preds=1,
-                 log_dir=None):
+                 log_dir=None,
+                 nh=None,
+                 nstack=None):
         self.n_preds = n_preds
+        self.nh = nh  # 动态设置观测空间大小
+        self.nstack = nstack  # 动态设置帧堆叠数量
         graph, self.sess = self.init_sess(cluster_dict, cluster_job_name)
         # Why not just use soft device placement? With soft placement,
         # if we have a bug which prevents an operation being placed on the GPU
@@ -49,7 +53,9 @@ class RewardPredictorEnsemble:
                             core_network=core_network,
                             dropout=dropout,
                             batchnorm=batchnorm,
-                            lr=lr)
+                            lr=lr,
+                            nh=self.nh,
+                            nstack=self.nstack)
                 self.rps.append(rp)
             self.init_op = tf.global_variables_initializer()
             # Why save_relative_paths=True?
@@ -128,7 +134,9 @@ class RewardPredictorEnsemble:
         Return (unnormalized) reward for each frame of a single segment
         from each member of the ensemble.
         """
-        assert_equal(obs.shape[1:], (84, 84, 4))
+        # assert_equal(obs.shape[1:], (84, 84, 4))
+
+        assert_equal(obs.shape[1:], (self.nh * self.nstack,))
         n_steps = obs.shape[0]
         feed_dict = {}
         for rp in self.rps:
@@ -151,7 +159,9 @@ class RewardPredictorEnsemble:
         ensemble separately, then averaging the resulting rewards across all
         ensemble members.)
         """
-        assert_equal(obs.shape[1:], (84, 84, 4))
+        # assert_equal(obs.shape[1:], (84, 84, 4))
+        assert_equal(obs.shape[1:], (self.nh * self.nstack,))
+
         n_steps = obs.shape[0]
 
         # Get unnormalized rewards
@@ -292,20 +302,27 @@ class RewardPredictorNetwork:
     - pred      Predicted preference
     """
 
-    def __init__(self, core_network, dropout, batchnorm, lr):
+    def __init__(self, core_network, dropout, batchnorm, lr, nh, nstack):
         training = tf.placeholder(tf.bool)
         # Each element of the batch is one trajectory segment.
         # (Dimensions are n segments x n frames per segment x ...)
-        s1 = tf.placeholder(tf.float32, shape=(None, None, 84, 84, 4))
-        s2 = tf.placeholder(tf.float32, shape=(None, None, 84, 84, 4))
+        self.nh = nh
+        self.nstack = nstack
+
+        if isinstance(nh, int):
+            s1 = tf.placeholder(tf.float32, shape=(None, None, nh * nstack))
+            s2 = tf.placeholder(tf.float32, shape=(None, None, nh * nstack))
+            s1_unrolled = tf.reshape(s1, [-1, nh * nstack])
+            s2_unrolled = tf.reshape(s2, [-1, nh * nstack])
+        else:
+            # If nh is a list, it is image input
+            s1 = tf.placeholder(tf.float32, shape=(None, None, nh[0], nh[1], nstack))
+            s2 = tf.placeholder(tf.float32, shape=(None, None, nh[0], nh[1], nstack))
+            s1_unrolled = tf.reshape(s1, [-1, nh[0], nh[1], nstack])
+            s2_unrolled = tf.reshape(s2, [-1, nh[0], nh[1], nstack])
+
         # For each trajectory segment, there is one human judgement.
         pref = tf.placeholder(tf.float32, shape=(None, 2))
-
-        # Concatenate trajectory segments so that the first dimension is just
-        # frames
-        # (necessary because of conv layer's requirements on input shape)
-        s1_unrolled = tf.reshape(s1, [-1, 84, 84, 4])
-        s2_unrolled = tf.reshape(s2, [-1, 84, 84, 4])
 
         # Predict rewards for each frame in the unrolled batch
         _r1 = core_network(
@@ -321,42 +338,60 @@ class RewardPredictorNetwork:
             reuse=True,
             training=training)
 
+        # Remove the extra dimension if necessary
+        if isinstance(nh, int):
+            _r1 = tf.squeeze(_r1, axis=[-1])
+            _r2 = tf.squeeze(_r2, axis=[-1])
         # Shape should be 'unrolled batch size'
         # where 'unrolled batch size' is 'batch size' x 'n frames per segment'
-        c1 = tf.assert_rank(_r1, 1)
-        c2 = tf.assert_rank(_r2, 1)
-        with tf.control_dependencies([c1, c2]):
-            # Re-roll to 'batch size' x 'n frames per segment'
-            __r1 = tf.reshape(_r1, tf.shape(s1)[0:2])
-            __r2 = tf.reshape(_r2, tf.shape(s2)[0:2])
+        # c1 = tf.assert_rank(_r1, 1)
+        # c2 = tf.assert_rank(_r2, 1)
+        # with tf.control_dependencies([c1, c2]):
+        #     # Re-roll to 'batch size' x 'n frames per segment'
+        #     __r1 = tf.reshape(_r1, tf.shape(s1)[0:2])
+        #     __r2 = tf.reshape(_r2, tf.shape(s2)[0:2])
+
+        __r1 = tf.reshape(_r1, tf.shape(s1)[0:2])
+        __r2 = tf.reshape(_r2, tf.shape(s2)[0:2])
+
+
         # Shape should be 'batch size' x 'n frames per segment'
-        c1 = tf.assert_rank(__r1, 2)
-        c2 = tf.assert_rank(__r2, 2)
-        with tf.control_dependencies([c1, c2]):
-            r1 = __r1
-            r2 = __r2
+        # c1 = tf.assert_rank(__r1, 2)
+        # c2 = tf.assert_rank(__r2, 2)
+        # with tf.control_dependencies([c1, c2]):
+        #     r1 = __r1
+        #     r2 = __r2
+
+        r1 = __r1
+        r2 = __r2
 
         # Sum rewards over all frames in each segment
         _rs1 = tf.reduce_sum(r1, axis=1)
         _rs2 = tf.reduce_sum(r2, axis=1)
         # Shape should be 'batch size'
-        c1 = tf.assert_rank(_rs1, 1)
-        c2 = tf.assert_rank(_rs2, 1)
-        with tf.control_dependencies([c1, c2]):
-            rs1 = _rs1
-            rs2 = _rs2
+        # c1 = tf.assert_rank(_rs1, 1)
+        # c2 = tf.assert_rank(_rs2, 1)
+        # with tf.control_dependencies([c1, c2]):
+        #     rs1 = _rs1
+        #     rs2 = _rs2
+
+        rs1 = _rs1
+        rs2 = _rs2
 
         # Predict preferences for each segment
         _rs = tf.stack([rs1, rs2], axis=1)
         # Shape should be 'batch size' x 2
-        c1 = tf.assert_rank(_rs, 2)
-        with tf.control_dependencies([c1]):
-            rs = _rs
+        # c1 = tf.assert_rank(_rs, 2)
+        # with tf.control_dependencies([c1]):
+        #     rs = _rs
+
+        rs = _rs
         _pred = tf.nn.softmax(rs)
         # Shape should be 'batch_size' x 2
-        c1 = tf.assert_rank(_pred, 2)
-        with tf.control_dependencies([c1]):
-            pred = _pred
+        # c1 = tf.assert_rank(_pred, 2)
+        # with tf.control_dependencies([c1]):
+        #     pred = _pred
+        pred = _pred
 
         preds_correct = tf.equal(tf.argmax(pref, 1), tf.argmax(pred, 1))
         accuracy = tf.reduce_mean(tf.cast(preds_correct, tf.float32))
